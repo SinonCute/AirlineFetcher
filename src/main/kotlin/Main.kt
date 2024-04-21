@@ -42,8 +42,7 @@ fun main() {
 
 private fun randomAircrafts() {
     val checkEachAirlinePerYear = listOf(104, 2512, 3263, 2812, 2888, 735, 7, 1100, 637, 676, 95, 129, 38, 4)
-    val airlines =
-        listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
+    val airlines = listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
 
     val currentPath = System.getProperty("user.dir")
 
