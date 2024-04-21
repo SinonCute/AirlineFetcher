@@ -25,13 +25,13 @@ fun main() {
     )
 
     val config = HikariConfig()
-    config.jdbcUrl = "jdbc:h2:file:./database"
+    config.jdbcUrl = "jdbc:h2:file:./data/database"
     config.driverClassName = "org.h2.Driver"
     dataSource = HikariDataSource(config)
 
     createTable()
 
-    val aircrafts = fetchTable().filter { it.model == null}
+    val aircrafts = fetchTable().filter { it.model == null }
     val aircraftsToCheck = aircrafts.shuffled().take(20)
     aircraftsToCheck.forEach {
         println("Getting aircraft ${it.flight} - ${it.date}...")
@@ -42,14 +42,15 @@ fun main() {
 
 private fun randomAircrafts() {
     val checkEachAirlinePerYear = listOf(104, 2512, 3263, 2812, 2888, 735, 7, 1100, 637, 676, 95, 129, 38, 4)
-    val airlines = listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
+    val airlines =
+        listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
 
     val currentPath = System.getProperty("user.dir")
 
     val aircrafts = mutableListOf<Aircraft>()
     val aircraftsSorted = mutableListOf<Aircraft>()
 
-    val files = File(currentPath).listFiles()?.filter { it.extension == "json" }
+    val files = File("$currentPath/data").listFiles()?.filter { it.extension == "json" }
 
     files?.forEach { file ->
         val json = file.readText()
@@ -62,7 +63,6 @@ private fun randomAircrafts() {
         val aircraftsMatched = aircrafts.filter { it.icao == code }
         val randomAircrafts = aircraftsMatched.shuffled().take(needToTake)
 
-        //assign id because I forgot to assign id when downloading data
         randomAircrafts.forEach {
             it.id = UUID.randomUUID().toString()
         }
@@ -80,7 +80,7 @@ private fun calculateJson() {
         return
     }
 
-    val files = File(currentPath).listFiles()?.filter { it.extension == "json" }
+    val files = File("$currentPath/data").listFiles()?.filter { it.extension == "json" }
 
     files?.forEach { file ->
         val json = file.readText()
@@ -104,13 +104,12 @@ private fun calculateJson() {
 private fun downloadAircrafts(airlinesCodes: List<String>) = runBlocking {
     val jobs = mutableListOf<Job>()
 
-    val start = System.currentTimeMillis()
-
     //start from May 2023 to April 2024
     var monthStart = 5
     var monthEnd = 12
     for (year in 2023..2024) {
         for (month in monthStart..monthEnd) {
+            //launch 3 threads at a time
             jobs += launch(Dispatchers.Default) {
                 println("Starting thread for ${year}/${month}...")
                 val times = mutableListOf<String>()
@@ -129,7 +128,8 @@ private fun downloadAircrafts(airlinesCodes: List<String>) = runBlocking {
 
                 times.forEach { time ->
                     println("Downloading data for ${monthFormatted}/01/${time}Z...")
-                    val url = "https://samples.adsbexchange.com/readsb-hist/${year}/${monthFormatted}/01/${time}Z.json.gz"
+                    val url =
+                        "https://samples.adsbexchange.com/readsb-hist/${year}/${monthFormatted}/01/${time}Z.json.gz"
                     val response = client.newCall(Request.Builder().url(url).build()).execute()
                     if (response.code != 200) {
                         println("Failed to download data for ${year}/${monthFormatted}/01/${time}Z")
@@ -143,15 +143,23 @@ private fun downloadAircrafts(airlinesCodes: List<String>) = runBlocking {
                     aircraftsArray.forEach {
                         val flight = it.asJsonObject.get("flight").asString
                         airlinesCodes.forEach { code ->
-                            if (flight.startsWith(code) && aircrafts.any { aircraft -> aircraft.flight == flight }.not()) {
-                                aircrafts.add(Aircraft(UUID.randomUUID().toString(), code, flight.trim(), "${year}-${monthFormatted}-01"))
+                            if (flight.startsWith(code) && aircrafts.any { aircraft -> aircraft.flight == flight }
+                                    .not()) {
+                                aircrafts.add(
+                                    Aircraft(
+                                        UUID.randomUUID().toString(),
+                                        code,
+                                        flight.trim(),
+                                        "${year}-${monthFormatted}-01"
+                                    )
+                                )
                             }
                         }
                     }
                 }
                 println("Saving data to ${year}-${monthFormatted}.json...")
                 val currentPath = System.getProperty("user.dir")
-                val file = File("$currentPath/${year}-${monthFormatted}.json")
+                val file = File("$currentPath/data/${year}-${monthFormatted}.json")
 
                 val gson = GsonBuilder().setPrettyPrinting().create()
                 val json = gson.toJson(aircrafts)
@@ -165,25 +173,33 @@ private fun downloadAircrafts(airlinesCodes: List<String>) = runBlocking {
         monthStart = 1
         monthEnd = 4
     }
-
-    //timer end
-    val end = System.currentTimeMillis()
-    println("Time taken: ${(end - start) / 60000}m")
 }
 
 private fun createTable() {
     val connection = dataSource!!.connection
     val statement = connection.createStatement()
-    statement.execute("CREATE TABLE IF NOT EXISTS aircrafts (id VARCHAR(36) PRIMARY KEY, icao VARCHAR(4), flight VARCHAR(10), date VARCHAR(10), model VARCHAR(50) NULL, distance VARCHAR(100) NULL)")
+    statement.execute("""
+        CREATE TABLE IF NOT EXISTS aircrafts (
+            id VARCHAR(36) PRIMARY KEY, 
+            icao VARCHAR(4), 
+            flight VARCHAR(10), 
+            date VARCHAR(10), 
+            model VARCHAR(50) NULL, 
+            distance VARCHAR(100) NULL
+            )
+    """.trimIndent())
     statement.close()
     connection.close()
 }
 
 fun inputTable(aircraft: Aircraft) {
     val connection = dataSource!!.connection
-    val statement = connection.prepareStatement(
-        "MERGE INTO aircrafts (id, icao, flight, date, model, distance) KEY(id) VALUES (?, ?, ?, ?, ?, ?)"
-    )
+    val statement = connection.prepareStatement("""
+        MERGE INTO aircrafts 
+        (id, icao, flight, date, model, distance) 
+        KEY(id) 
+        VALUES (?, ?, ?, ?, ?, ?)
+    """.trimIndent())
     statement.setString(1, aircraft.id)
     statement.setString(2, aircraft.icao)
     statement.setString(3, aircraft.flight)
@@ -248,13 +264,14 @@ fun fetchAPI(aircraft: Aircraft): Aircraft {
     response.close()
     client.dispatcher.executorService.shutdown()
 
-    return aircraft.copy(model = model, distance = GreatCircleDistance(
-        greatCircleDistance.get("km").asDouble,
-        greatCircleDistance.get("mile").asDouble,
-        greatCircleDistance.get("nm").asDouble
-    ))
+    return aircraft.copy(
+        model = model, distance = GreatCircleDistance(
+            greatCircleDistance.get("km").asDouble,
+            greatCircleDistance.get("mile").asDouble,
+            greatCircleDistance.get("nm").asDouble
+        )
+    )
 }
-
 
 
 data class Aircraft(
