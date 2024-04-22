@@ -1,5 +1,7 @@
 plugins {
     kotlin("jvm") version "1.9.23"
+    id("com.github.johnrengelman.shadow") version "7.1.2"
+    application
 }
 
 group = "hiencao.me"
@@ -9,8 +11,11 @@ repositories {
     mavenCentral()
 }
 
+application {
+    mainClass = "hiencao.me.MainKt"
+}
+
 dependencies {
-    testImplementation("org.jetbrains.kotlin:kotlin-test")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.7")
     implementation("com.zaxxer:HikariCP:5.1.0")

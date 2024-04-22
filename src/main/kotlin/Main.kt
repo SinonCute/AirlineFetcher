@@ -6,24 +6,22 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+private val AIRLINES_CODES =  listOf(
+    "ASA", "AYA", "AAL", "VXP", "MXY", "DAL", "EAL", "FFT", "HAL", "JBU",
+    "RVF", "SWA", "NKS", "SCX", "UAL"
+)
 
 
 private var dataSource: HikariDataSource? = null
 fun main() {
-    val airlinesCodes: List<String> = listOf(
-        "ASA", "AYA", "AAL", "VXP", "MXY", "DAL", "EAL", "FFT", "HAL", "JBU",
-        "RVF", "SWA", "NKS", "SCX", "UAL"
-    )
-
     val config = HikariConfig()
     config.jdbcUrl = "jdbc:h2:file:./data/database"
     config.driverClassName = "org.h2.Driver"
@@ -31,17 +29,36 @@ fun main() {
 
     createTable()
 
-    val aircrafts = fetchTable().filter { it.model == null }
-    val aircraftsToCheck = aircrafts.shuffled().take(20)
-    aircraftsToCheck.forEach {
-        println("Getting aircraft ${it.flight} - ${it.date}...")
-        val aircraft = fetchAPI(it)
-        inputTable(aircraft)
+    var successes = 0
+    runBlocking {
+        launch {
+            val aircrafts = fetchTable().filter { it.model == null }
+            aircrafts.forEach {
+                println("\u001B[32mGetting aircraft ${it.flight} - ${it.date}...\u001B[0m")
+                val aircraft = fetchAPIWithRateLimit(it)
+                if (aircraft.model != null) {
+                    successes++
+                    inputData(aircraft)
+                } else {
+                    deleteData(aircraft)
+                }
+                println("\u001B[32mCurrent successes: $successes out of ${aircrafts.size} | ${successes.toFloat() / aircrafts.size * 100}%\u001B[0m")
+            }
+        }
     }
 }
 
+private suspend fun fetchAPIWithRateLimit(aircraft: Aircraft): Aircraft {
+    val startTime = System.currentTimeMillis()
+    val response  = fetchAPI(aircraft)
+    val elapsedTime = System.currentTimeMillis() - startTime
+    val remainingDelay = (TimeUnit.MINUTES.toMillis(1) / 50  - elapsedTime).coerceAtLeast(0)
+    delay(remainingDelay)
+    return response
+}
+
 private fun randomAircrafts() {
-    val checkEachAirlinePerYear = listOf(104, 2512, 3263, 2812, 2888, 735, 7, 1100, 637, 676, 95, 129, 38, 4)
+    val checkEachAirlinePerYear = listOf(103, 2492, 3264, 2753, 2934, 723, 5, 1085, 667, 693, 101, 134, 42, 4)
     val airlines = listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
 
     val currentPath = System.getProperty("user.dir")
@@ -67,7 +84,7 @@ private fun randomAircrafts() {
         }
         aircraftsSorted.addAll(randomAircrafts)
     }
-    aircraftsSorted.forEach(::inputTable)
+    aircraftsSorted.forEach(::inputData)
 }
 
 private fun calculateJson() {
@@ -191,7 +208,7 @@ private fun createTable() {
     connection.close()
 }
 
-fun inputTable(aircraft: Aircraft) {
+fun inputData(aircraft: Aircraft) {
     val connection = dataSource!!.connection
     val statement = connection.prepareStatement("""
         MERGE INTO aircrafts 
@@ -206,6 +223,15 @@ fun inputTable(aircraft: Aircraft) {
     statement.setString(5, aircraft.model)
     statement.setString(6, aircraft.distance?.let { Gson().toJson(it) })
 
+    statement.execute()
+    statement.close()
+    connection.close()
+}
+
+fun deleteData(aircraft: Aircraft) {
+    val connection = dataSource!!.connection
+    val statement = connection.prepareStatement("DELETE FROM aircrafts WHERE id = ?")
+    statement.setString(1, aircraft.id)
     statement.execute()
     statement.close()
     connection.close()
@@ -237,37 +263,62 @@ fun fetchTable(): List<Aircraft> {
     return aircrafts
 }
 
-fun fetchAPI(aircraft: Aircraft): Aircraft {
+suspend fun fetchAPI(aircraft: Aircraft): Aircraft {
     val client = OkHttpClient()
 
     val request: Request = Request.Builder()
         .url("https://aerodatabox.p.rapidapi.com/flights/callsign/${aircraft.flight}/${aircraft.date}?withAircraftImage=false&withLocation=false")
         .get()
-        .addHeader("X-RapidAPI-Key", "d87e93484dmsh691012194be7fdep10e298jsn440df32d33e5")
+        .addHeader("X-RapidAPI-Key", "152006480cmshbc36ba3ae9321b6p1c9e57jsn047b8d2fe747")
         .addHeader("X-RapidAPI-Host", "aerodatabox.p.rapidapi.com")
         .build()
 
     val response: Response = client.newCall(request).execute()
 
-    if (response.code != 200) {
-        println("Failed to fetch data for ${aircraft.flight} - ${aircraft.date}")
+    if (response.code != 200 && response.code != 429) {
+        println("\u001B[31mFailed to fetch data for ${aircraft.flight} - ${aircraft.date}.\u001B[0m")
         return aircraft
+    }
+
+    if (response.code == 429) {
+        println("\u001B[31mRate limit exceeded. Please try again later.\u001B[0m")
+        delay(60000)
+        println("\u001B[31mRetrying...\u001B[0m")
+        return fetchAPI(aircraft)
     }
 
     val rawData = response.body?.string()
     val jsonArray = Gson().fromJson(rawData, JsonArray::class.java)
-    val jsonObject = jsonArray[0].asJsonObject
-    val greatCircleDistance = jsonObject.get("greatCircleDistance").asJsonObject
-    val model = jsonObject.get("aircraft").asJsonObject.get("model").asString
+    var greatCircleDistance: JsonObject? = null
+    var model: String? = null
+    for (index in 0 until jsonArray.size()) {
+        val obj = jsonArray[index].asJsonObject
+        if (obj.get("greatCircleDistance") != null) {
+            greatCircleDistance = obj.get("greatCircleDistance").asJsonObject
+        }
+        if (obj.get("aircraft") != null && obj.get("aircraft").isJsonNull.not()) {
+            model = obj.get("aircraft").asJsonObject.get("model").asString
+        }
+        if (greatCircleDistance != null && model != null) {
+            break
+        }
+    }
+
+    if (greatCircleDistance == null) {
+        greatCircleDistance = JsonObject()
+        greatCircleDistance.addProperty("km", "NaN")
+        greatCircleDistance.addProperty("mile", "NaN")
+        greatCircleDistance.addProperty("nm", "NaN")
+    }
 
     response.close()
     client.dispatcher.executorService.shutdown()
 
     return aircraft.copy(
         model = model, distance = GreatCircleDistance(
-            greatCircleDistance.get("km").asDouble,
-            greatCircleDistance.get("mile").asDouble,
-            greatCircleDistance.get("nm").asDouble
+            km = if (greatCircleDistance.get("km").asString != "NaN") greatCircleDistance.get("km").asDouble else 0.0,
+            mile = if (greatCircleDistance.get("mile").asString != "NaN") greatCircleDistance.get("mile").asDouble else 0.0,
+            nm = if (greatCircleDistance.get("nm").asString!= "NaN") greatCircleDistance.get("nm").asDouble else 0.0
         )
     )
 }
