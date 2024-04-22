@@ -14,50 +14,51 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-private val AIRLINES_CODES =  listOf(
-    "ASA", "AYA", "AAL", "VXP", "MXY", "DAL", "EAL", "FFT", "HAL", "JBU",
-    "RVF", "SWA", "NKS", "SCX", "UAL"
-)
-
-
 private var dataSource: HikariDataSource? = null
 fun main() {
     val config = HikariConfig()
     config.jdbcUrl = "jdbc:h2:file:./data/database"
     config.driverClassName = "org.h2.Driver"
     dataSource = HikariDataSource(config)
-
     createTable()
 
-    var successes = 0
-    runBlocking {
-        launch {
-            val aircrafts = fetchTable().filter { it.model == null }
-            aircrafts.forEach {
-                println("\u001B[32mGetting aircraft ${it.flight} - ${it.date}...\u001B[0m")
-                val aircraft = fetchAPIWithRateLimit(it)
-                if (aircraft.model != null) {
-                    successes++
-                    inputData(aircraft)
-                } else {
-                    deleteData(aircraft)
-                }
-                println("\u001B[32mCurrent successes: $successes out of ${aircrafts.size} | ${successes.toFloat() / aircrafts.size * 100}%\u001B[0m")
-            }
-        }
-    }
+//    var successes = 0
+//    runBlocking {
+//        launch {
+//            val aircrafts = fetchTable().filter { it.model == null }
+//            aircrafts.forEach {
+//                println("\u001B[32mGetting aircraft ${it.flight} - ${it.date}...\u001B[0m")
+//                val aircraft = fetchAPIWithRateLimit(it)
+//                if (aircraft.model != null) {
+//                    successes++
+//                    inputData(aircraft)
+//                } else {
+//                    deleteData(aircraft)
+//                }
+//                println("\u001B[32mCurrent successes: $successes out of ${aircrafts.size} | ${successes.toFloat() / aircrafts.size * 100}%\u001B[0m")
+//            }
+//        }
+//    }
+}
+
+private fun tableToJSON(aircrafts: List<Aircraft>) {
+    val gson = GsonBuilder().setPrettyPrinting().create()
+    val json = gson.toJson(aircrafts)
+    val currentPath = System.getProperty("user.dir")
+    val file = File("$currentPath/data/aircrafts.json")
+    file.writeText(json)
 }
 
 private suspend fun fetchAPIWithRateLimit(aircraft: Aircraft): Aircraft {
     val startTime = System.currentTimeMillis()
     val response  = fetchAPI(aircraft)
     val elapsedTime = System.currentTimeMillis() - startTime
-    val remainingDelay = (TimeUnit.MINUTES.toMillis(1) / 50  - elapsedTime).coerceAtLeast(0)
+    val remainingDelay = (TimeUnit.MINUTES.toMillis(1) / 80  - elapsedTime).coerceAtLeast(0)
     delay(remainingDelay)
     return response
 }
 
-private fun randomAircrafts() {
+private fun getRandomAirscraft() {
     val checkEachAirlinePerYear = listOf(103, 2492, 3264, 2753, 2934, 723, 5, 1085, 667, 693, 101, 134, 42, 4)
     val airlines = listOf("HAL", "UAL", "AAL", "DAL", "SWA", "ASA", "RVF", "JBU", "FFT", "NKS", "MXY", "SCX", "VXP", "EAL")
 
@@ -269,7 +270,7 @@ suspend fun fetchAPI(aircraft: Aircraft): Aircraft {
     val request: Request = Request.Builder()
         .url("https://aerodatabox.p.rapidapi.com/flights/callsign/${aircraft.flight}/${aircraft.date}?withAircraftImage=false&withLocation=false")
         .get()
-        .addHeader("X-RapidAPI-Key", "152006480cmshbc36ba3ae9321b6p1c9e57jsn047b8d2fe747")
+        .addHeader("X-RapidAPI-Key", "API_KEY")
         .addHeader("X-RapidAPI-Host", "aerodatabox.p.rapidapi.com")
         .build()
 
